@@ -2,6 +2,8 @@
 	#include <OctoWS2811.h>
 #endif
 
+#include <EL.h>
+#include <ELAssert.h>
 #include <ELUtilities.h>
 #include <ELSunRiseAndSet.h>
 #include <ELRealTime.h>
@@ -13,8 +15,8 @@
 #include <ELDigitalIO.h>
 #include <ELConfig.h>
 #include <ELCommand.h>
-#include <ELAssert.h>
-#include <EL.h>
+#include <ELOutdoorLightingControl.h>
+#include <ELRemoteLogging.h>
 
 enum
 {
@@ -23,28 +25,44 @@ enum
 	eLEDsPerStrip = eIciclesPerStrip * eLEDsPerIcicle,
 	eIcicleTotal = eIciclesPerStrip * 8,
 
+	eToggleButtonPin = 9,
 	eTransformerRelayPin = 17,
+	eMotionSensorPin = 22,
+	eESP8266ResetPint = 23,
 
 	eUpdateTimeUS = 30000,
 };
 
 DMAMEM int		gIcicleLEDDisplayMemory[eLEDsPerStrip * 6];
 
-class CModule_Icicle : public CModule, public ICmdHandler
+class CModule_Icicle : public CModule, public ICmdHandler, public IOutdoorLightingInterface, public IInternetHandler
 {
 public:
+	
+	MModuleSingleton_Declaration(CModule_Icicle)
+
+private:
 	
 	CModule_Icicle(
 		)
 	:
 		CModule(
-			"icic",
 			sizeof(settings),
 			3,
 			&settings,
 			eUpdateTimeUS),
 		leds(eLEDsPerStrip, gIcicleLEDDisplayMemory, NULL, WS2811_RGB)
 	{
+		// Begin including
+		CModule_RealTime::Include();
+		CModule_Internet::Include();
+		CModule_Command::Include();
+		internetDevice = CModule_ESP8266::Include(&Serial1, eESP8266ResetPint);
+		CModule_Loggly*	loggly = CModule_Loggly::Include("pergola", "logs-01.loggly.com", "/inputs/568b321d-0d6f-47d3-ac34-4a36f4125612");
+		AddSysMsgHandler(loggly);
+		CModule_OutdoorLightingControl::Include(this, eMotionSensorPin, eTransformerRelayPin, eToggleButtonPin, NULL);
+
+		DoneIncluding();
 	}
 
 	virtual void
@@ -54,6 +72,11 @@ public:
 		IRealTimeDataProvider*	ds3234Provider = gRealTime->CreateDS3234Provider(10);
 		gRealTime->SetProvider(ds3234Provider, 24 * 60 * 60);
 
+		// Instantiate the wireless networking device and configure it to server pages
+		gInternetModule->SetInternetDevice(internetDevice);
+		gInternetModule->CommandServer_Start(8080);
+		gInternetModule->CommandServer_RegisterFrontPage(this, static_cast<TInternetServerPageMethod>(&CModule_Icicle::CommandHomePageHandler));
+
 		for(int i = 0; i < eIcicleTotal; ++i)
 		{
 			icicles[i].SetInitialState(this);
@@ -61,18 +84,13 @@ public:
 
 		memset(gIcicleLEDDisplayMemory, 0, sizeof(gIcicleLEDDisplayMemory));
 
-		pinMode(eTransformerRelayPin, OUTPUT);
-		digitalWrite(eTransformerRelayPin, 1);
-
-		gCommand->RegisterCommand("grow_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::GrowDistributionSet));
-		gCommand->RegisterCommand("depth_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::MaxDepthDistributionSet));
-		gCommand->RegisterCommand("lifetime_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::MaxDepthLifeDistributionSet));
-		gCommand->RegisterCommand("driptime_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::DripStartTimeDistributionSet));
-		gCommand->RegisterCommand("driprate_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::DripRateSet));
-		gCommand->RegisterCommand("growcolor_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::GrowDownColorSet));
-		gCommand->RegisterCommand("recedecolor_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::RecedeUpColorSet));
-
-		SystemMsg("HERE");
+		gCommandModule->RegisterCommand("grow_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::GrowDistributionSet));
+		gCommandModule->RegisterCommand("depth_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::MaxDepthDistributionSet));
+		gCommandModule->RegisterCommand("lifetime_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::MaxDepthLifeDistributionSet));
+		gCommandModule->RegisterCommand("driptime_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::DripStartTimeDistributionSet));
+		gCommandModule->RegisterCommand("driprate_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::DripRateSet));
+		gCommandModule->RegisterCommand("growcolor_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::GrowDownColorSet));
+		gCommandModule->RegisterCommand("recedecolor_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::RecedeUpColorSet));
 
 		leds.begin();
 
@@ -82,6 +100,63 @@ public:
 		}
 
 		leds.show();
+	}
+
+	void
+	CommandHomePageHandler(
+		IOutputDirector*	inOutput)
+	{
+		// Send html via in Output to add to the command server home page served to clients
+
+		inOutput->printf("<table border=\"1\">");
+		inOutput->printf("<tr><th>Parameter</th><th>Value</th></tr>");
+
+		#if 0
+		// add viewMode
+		inOutput->printf("<tr><td>View Mode</td><td>%s</td></tr>", gViewModeStr[viewMode]);
+
+		// add settings.defaultColor
+		inOutput->printf("<tr><td>Default Color</td><td>r:%02.02f g:%02.02f b:%02.02f</td></tr>", settings.defaultColor.r, settings.defaultColor.g, settings.defaultColor.b);
+
+		// add settings.defaultIntensity
+		inOutput->printf("<tr><td>Default Intensity</td><td>%02.02f</td></tr>", settings.defaultIntensity);
+
+		// add settings.activeIntensity
+		inOutput->printf("<tr><td>Active Intensity</td><td>%02.02f</td></tr>", settings.activeIntensity);
+
+		// add settings.minLux, settings.maxLux
+		inOutput->printf("<tr><td>Lux Range</td><td>%f %f</td></tr>", settings.minLux, settings.maxLux);
+		#endif
+
+		inOutput->printf("</table>");
+	}
+
+	virtual void
+	LEDStateChange(
+		bool	inLEDsOn)
+	{
+		ledsOn = inLEDsOn;
+	}
+
+	virtual void
+	MotionSensorStateChange(
+		bool	inMotionSensorTriggered)
+	{
+
+	}
+
+	virtual void
+	PushButtonStateChange(
+		int	inToggleCount)
+	{
+
+	}
+
+	virtual void
+	TimeOfDayChange(
+		int	inTimeOfDay)
+	{
+
 	}
 
 	uint8_t
@@ -574,11 +649,17 @@ public:
 	OctoWS2811		leds;
 	SIcicleState	icicles[eIcicleTotal];
 	SSettings		settings;
+
+	IInternetDevice*	internetDevice;
+
+	bool	ledsOn;
 };
+
+MModuleSingleton_Implementation(CModule_Icicle);
 
 void
 SetupIcicleModule(
 	void)
 {
-	new CModule_Icicle();
+	CModule_Icicle::Include();
 }
