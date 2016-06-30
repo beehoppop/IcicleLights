@@ -39,7 +39,7 @@ class CModule_Icicle : public CModule, public ICmdHandler, public IOutdoorLighti
 {
 public:
 	
-	MModuleSingleton_Declaration(CModule_Icicle)
+	MModule_Declaration(CModule_Icicle)
 
 private:
 	
@@ -53,27 +53,25 @@ private:
 			eUpdateTimeUS),
 		leds(eLEDsPerStrip, gIcicleLEDDisplayMemory, NULL, WS2811_RGB)
 	{
-		// Begin including
+		IInternetDevice*		internetDevice = CModule_ESP8266::Include(&Serial1, eESP8266ResetPint);
+		IRealTimeDataProvider*	ds3234Provider = CreateDS3234Provider(10);
+		CModule_Loggly*			loggly = CModule_Loggly::Include("pergola", "logs-01.loggly.com", "/inputs/568b321d-0d6f-47d3-ac34-4a36f4125612");
+		
 		CModule_RealTime::Include();
 		CModule_Internet::Include();
 		CModule_Command::Include();
-		internetDevice = CModule_ESP8266::Include(&Serial1, eESP8266ResetPint);
-		CModule_Loggly*	loggly = CModule_Loggly::Include("pergola", "logs-01.loggly.com", "/inputs/568b321d-0d6f-47d3-ac34-4a36f4125612");
-		AddSysMsgHandler(loggly);
 		CModule_OutdoorLightingControl::Include(this, eMotionSensorPin, eTransformerRelayPin, eToggleButtonPin, NULL);
-
-		DoneIncluding();
+		
+		AddSysMsgHandler(loggly);
+		gInternetModule->Configure(internetDevice);
+		gRealTime->Configure(ds3234Provider, 24 * 60 * 60);
 	}
 
 	virtual void
 	Setup(
 		void)
 	{
-		IRealTimeDataProvider*	ds3234Provider = gRealTime->CreateDS3234Provider(10);
-		gRealTime->SetProvider(ds3234Provider, 24 * 60 * 60);
-
 		// Instantiate the wireless networking device and configure it to server pages
-		gInternetModule->SetInternetDevice(internetDevice);
 		gInternetModule->CommandServer_Start(8080);
 		gInternetModule->CommandServer_RegisterFrontPage(this, static_cast<TInternetServerPageMethod>(&CModule_Icicle::CommandHomePageHandler));
 
@@ -85,8 +83,8 @@ private:
 		memset(gIcicleLEDDisplayMemory, 0, sizeof(gIcicleLEDDisplayMemory));
 
 		gCommandModule->RegisterCommand("grow_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::GrowDistributionSet));
-		gCommandModule->RegisterCommand("depth_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::MaxDepthDistributionSet));
-		gCommandModule->RegisterCommand("lifetime_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::MaxDepthLifeDistributionSet));
+		gCommandModule->RegisterCommand("depth_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::PeekDepthDistributionSet));
+		gCommandModule->RegisterCommand("lifetime_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::PeekDepthLifeDistributionSet));
 		gCommandModule->RegisterCommand("driptime_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::DripStartTimeDistributionSet));
 		gCommandModule->RegisterCommand("driprate_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::DripRateSet));
 		gCommandModule->RegisterCommand("growcolor_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::GrowDownColorSet));
@@ -111,22 +109,32 @@ private:
 		inOutput->printf("<table border=\"1\">");
 		inOutput->printf("<tr><th>Parameter</th><th>Value</th></tr>");
 
-		#if 0
-		// add viewMode
-		inOutput->printf("<tr><td>View Mode</td><td>%s</td></tr>", gViewModeStr[viewMode]);
+		// add grow rate
+		inOutput->printf("<tr><td>GrowRate</td><td>%2.2f %2.2f</td></tr>", settings.meanGrowRateLEDsPerSec, settings.stdGrowRateLEDsPerSec);
 
-		// add settings.defaultColor
-		inOutput->printf("<tr><td>Default Color</td><td>r:%02.02f g:%02.02f b:%02.02f</td></tr>", settings.defaultColor.r, settings.defaultColor.g, settings.defaultColor.b);
+		// add peek depth
+		inOutput->printf("<tr><td>PeekDepth</td><td>%2.2f %2.2f</td></tr>", settings.meanPeekDepth, settings.stdPeekDepth);
 
-		// add settings.defaultIntensity
-		inOutput->printf("<tr><td>Default Intensity</td><td>%02.02f</td></tr>", settings.defaultIntensity);
+		// add peek depth lifetime
+		inOutput->printf("<tr><td>PeekDepthLifetime</td><td>%2.2f %2.2f</td></tr>", settings.meanPeekDepthLifetimeSec, settings.stdPeekDepthLifetimeSec);
 
-		// add settings.activeIntensity
-		inOutput->printf("<tr><td>Active Intensity</td><td>%02.02f</td></tr>", settings.activeIntensity);
+		// add drip time
+		inOutput->printf("<tr><td>DripTime</td><td>%2.2f %2.2f</td></tr>", settings.meanIcicleStartDripTime, settings.stdIcicleStartDripTime);
 
-		// add settings.minLux, settings.maxLux
-		inOutput->printf("<tr><td>Lux Range</td><td>%f %f</td></tr>", settings.minLux, settings.maxLux);
-		#endif
+		// add drip rate PreIcicleEnd
+		inOutput->printf("<tr><td>DripRate PreIcicleEnd</td><td>%2.2f</td></tr>", settings.waterDripRatePreLEDsPerSec);
+
+		// add drip rate PostIcicleEnd
+		inOutput->printf("<tr><td>DripRate PostIcicleEnd</td><td>%2.2f</td></tr>", settings.waterDripRatePostLEDsPerSec);
+
+		// add grow down color
+		inOutput->printf("<tr><td>GrowDown Color</td><td>r:%02.02f g:%02.02f b:%02.02f</td></tr>", settings.growDownColorR, settings.growDownColorG, settings.growDownColorB);
+
+		// add recede up color
+		inOutput->printf("<tr><td>RecedeUp Color</td><td>r:%02.02f g:%02.02f b:%02.02f</td></tr>", settings.recedeUpColorR, settings.recedeUpColorG, settings.recedeUpColorB);
+
+		// add water drip color
+		inOutput->printf("<tr><td>WaterDrip Color</td><td>r:%02.02f g:%02.02f b:%02.02f</td></tr>", settings.waterDripR, settings.waterDripG, settings.waterDripB);
 
 		inOutput->printf("</table>");
 	}
@@ -176,31 +184,30 @@ private:
 	}
 
 	uint8_t
-	MaxDepthDistributionSet(
+	PeekDepthDistributionSet(
 		IOutputDirector*	inOutput,
 		int					inArgC,
 		char const*			inArgV[])
 	{
 		MReturnOnError(inArgC != 3, eCmd_Failed);
 
-		settings.meanMaxDepth = (float)atof(inArgV[1]);
-		settings.stdMaxDepth = (float)atof(inArgV[2]);
+		settings.meanPeekDepth = (float)atof(inArgV[1]);
+		settings.stdPeekDepth = (float)atof(inArgV[2]);
 
 		EEPROMSave();
 
 		return eCmd_Succeeded;
 	}
 
-	uint8_t
-	MaxDepthLifeDistributionSet(
-		IOutputDirector*	inOutput,
-		int					inArgC,
-		char const*			inArgV[])
+	uint8_t PeekDepthLifeDistributionSet(
+		IOutputDirector* inOutput,
+		int inArgC,
+		char const* inArgV[])
 	{
 		MReturnOnError(inArgC != 3, eCmd_Failed);
 
-		settings.meanMaxDepthLifetimeSec = (float)atof(inArgV[1]);
-		settings.stdMaxDepthLifetimeSec = (float)atof(inArgV[2]);
+		settings.meanPeekDepthLifetimeSec = (float)atof(inArgV[1]);
+		settings.stdPeekDepthLifetimeSec = (float)atof(inArgV[2]);
 
 		EEPROMSave();
 
@@ -279,10 +286,10 @@ private:
 	{
 		settings.meanGrowRateLEDsPerSec = 0.05f;
 		settings.stdGrowRateLEDsPerSec = 0.025f;
-		settings.meanMaxDepth = 4.0f;
-		settings.stdMaxDepth = 4.0f;
-		settings.meanMaxDepthLifetimeSec = 10.0f;
-		settings.stdMaxDepthLifetimeSec = 2.0f;
+		settings.meanPeekDepth = 4.0f;
+		settings.stdPeekDepth = 4.0f;
+		settings.meanPeekDepthLifetimeSec = 10.0f;
+		settings.stdPeekDepthLifetimeSec = 2.0f;
 		settings.meanIcicleStartDripTime = 60.0f * 5.0f;
 		settings.stdIcicleStartDripTime = 60.0f * 2.0f;
 		settings.waterDripRatePreLEDsPerSec = 2.0f;
@@ -462,12 +469,12 @@ private:
 		float	stdGrowRateLEDsPerSec;
 
 		// These two fields control gaussian distribution of max depth before receding
-		float	meanMaxDepth;
-		float	stdMaxDepth;
+		float	meanPeekDepth;
+		float	stdPeekDepth;
 
 		// These two fields control gaussian distribution of how long an icicle stays at the max depth before receding
-		float	meanMaxDepthLifetimeSec;
-		float	stdMaxDepthLifetimeSec;
+		float	meanPeekDepthLifetimeSec;
+		float	stdPeekDepthLifetimeSec;
 
 		// These two two fields control the gaussian distribution of time(secs) between water droplets
 		float	meanIcicleStartDripTime;
@@ -592,7 +599,7 @@ private:
 				growthRateLEDsPerSec = 1.0f;
 			}
 
-			maxDepth = GetRandomFloatGuassian(inParent->settings.meanMaxDepth, inParent->settings.stdMaxDepth);
+			maxDepth = GetRandomFloatGuassian(inParent->settings.meanPeekDepth, inParent->settings.stdPeekDepth);
 			if(maxDepth < 1.5f)
 			{
 				maxDepth = 1.5f;
@@ -602,7 +609,7 @@ private:
 				maxDepth = (float)eLEDsPerIcicle;
 			}
 
-			float	maxDepthLifeTimeFloat = GetRandomFloatGuassian(inParent->settings.meanMaxDepthLifetimeSec, inParent->settings.stdMaxDepthLifetimeSec);
+			float	maxDepthLifeTimeFloat = GetRandomFloatGuassian(inParent->settings.meanPeekDepthLifetimeSec, inParent->settings.stdPeekDepthLifetimeSec);
 			if(maxDepthLifeTimeFloat < 1.0f)
 			{
 				maxDepthLifeTimeFloat = 1.0f;
@@ -650,12 +657,11 @@ private:
 	SIcicleState	icicles[eIcicleTotal];
 	SSettings		settings;
 
-	IInternetDevice*	internetDevice;
-
 	bool	ledsOn;
 };
 
-MModuleSingleton_Implementation(CModule_Icicle);
+MModuleImplementation_Start(CModule_Icicle);
+MModuleImplementation_Finish(CModule_Icicle);
 
 void
 SetupIcicleModule(
