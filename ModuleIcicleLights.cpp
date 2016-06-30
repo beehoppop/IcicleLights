@@ -73,7 +73,7 @@ private:
 	{
 		// Instantiate the wireless networking device and configure it to server pages
 		gInternetModule->CommandServer_Start(8080);
-		gInternetModule->CommandServer_RegisterFrontPage(this, static_cast<TInternetServerPageMethod>(&CModule_Icicle::CommandHomePageHandler));
+		MInternetRegisterFrontPage(CModule_Icicle::CommandHomePageHandler);
 
 		for(int i = 0; i < eIcicleTotal; ++i)
 		{
@@ -82,13 +82,13 @@ private:
 
 		memset(gIcicleLEDDisplayMemory, 0, sizeof(gIcicleLEDDisplayMemory));
 
-		gCommandModule->RegisterCommand("grow_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::GrowDistributionSet));
-		gCommandModule->RegisterCommand("depth_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::PeekDepthDistributionSet));
-		gCommandModule->RegisterCommand("lifetime_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::PeekDepthLifeDistributionSet));
-		gCommandModule->RegisterCommand("driptime_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::DripStartTimeDistributionSet));
-		gCommandModule->RegisterCommand("driprate_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::DripRateSet));
-		gCommandModule->RegisterCommand("growcolor_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::GrowDownColorSet));
-		gCommandModule->RegisterCommand("recedecolor_set", this, static_cast<TCmdHandlerMethod>(&CModule_Icicle::RecedeUpColorSet));
+		MCommandRegister("grow_set", CModule_Icicle::GrowDistributionSet, "[mean] [std dev]: Set grow rate distribution");
+		MCommandRegister("depth_set", CModule_Icicle::PeekDepthDistributionSet, "[mean] [std dev]: Set peek depth distribution");
+		MCommandRegister("peekduration_set", CModule_Icicle::PeekDepthLifeDistributionSet, "[mean] [std dev]: Set the duration distribution at the peek depth");
+		MCommandRegister("driptime_set", CModule_Icicle::DripStartTimeDistributionSet, "[mean] [std dev]: Set the drip start distribution");
+		MCommandRegister("driprate_set", CModule_Icicle::DripRateSet, "[pre rate] [post rate]: Set the drip rate");
+		MCommandRegister("growcolor_set", CModule_Icicle::GrowDownColorSet, "[r] [g] [b]: Set the grow down color");
+		MCommandRegister("recedecolor_set", CModule_Icicle::RecedeUpColorSet, "[r] [g] [b]: Set the recede up color");
 
 		leds.begin();
 
