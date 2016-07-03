@@ -1,3 +1,34 @@
+/*
+	Author: Brent Pease (embeddedlibraryfeedback@gmail.com)
+
+	The MIT License (MIT)
+
+	Copyright (c) 2015-FOREVER Brent Pease
+
+	Permission is hereby granted, free of charge, to any person obtaining a copy
+	of this software and associated documentation files (the "Software"), to deal
+	in the Software without restriction, including without limitation the rights
+	to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+	copies of the Software, and to permit persons to whom the Software is
+	furnished to do so, subject to the following conditions:
+
+	The above copyright notice and this permission notice shall be included in all
+	copies or substantial portions of the Software.
+
+	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+	IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+	FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+	AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+	LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+	OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+	SOFTWARE.
+*/
+
+/*
+	ABOUT
+
+*/
+
 #if !defined(WIN32)
 	#include <OctoWS2811.h>
 #endif
@@ -53,7 +84,7 @@ private:
 			eUpdateTimeUS),
 		leds(eLEDsPerStrip, gIcicleLEDDisplayMemory, NULL, WS2811_RGB)
 	{
-		IInternetDevice*		internetDevice = CModule_ESP8266::Include(&Serial1, eESP8266ResetPint);
+		IInternetDevice*		internetDevice = CModule_ESP8266::Include(3, &Serial1, eESP8266ResetPint);
 		IRealTimeDataProvider*	ds3234Provider = CreateDS3234Provider(10);
 		CModule_Loggly*			loggly = CModule_Loggly::Include("pergola", "logs-01.loggly.com", "/inputs/568b321d-0d6f-47d3-ac34-4a36f4125612");
 		
@@ -65,6 +96,8 @@ private:
 		AddSysMsgHandler(loggly);
 		gInternetModule->Configure(internetDevice);
 		gRealTime->Configure(ds3234Provider, 24 * 60 * 60);
+
+		updateCumulatorUS = 0;
 	}
 
 	virtual void
@@ -125,16 +158,16 @@ private:
 		inOutput->printf("<tr><td>DripRate PreIcicleEnd</td><td>%2.2f</td></tr>", settings.waterDripRatePreLEDsPerSec);
 
 		// add drip rate PostIcicleEnd
-		inOutput->printf("<tr><td>DripRate PostIcicleEnd</td><td>%2.2f</td></tr>", settings.waterDripRatePostLEDsPerSec);
+		inOutput->printf("<tr><td>DripRate PostIcicleEnd</td><td>%2.2f</td></tr>", settings.waterDripRatePostLEDsPerTick);
 
 		// add grow down color
-		inOutput->printf("<tr><td>GrowDown Color</td><td>r:%02.02f g:%02.02f b:%02.02f</td></tr>", settings.growDownColorR, settings.growDownColorG, settings.growDownColorB);
+		inOutput->printf("<tr><td>GrowDown Color</td><td>r:%02d g:%02d b:%02d</td></tr>", settings.growDownColorR, settings.growDownColorG, settings.growDownColorB);
 
 		// add recede up color
-		inOutput->printf("<tr><td>RecedeUp Color</td><td>r:%02.02f g:%02.02f b:%02.02f</td></tr>", settings.recedeUpColorR, settings.recedeUpColorG, settings.recedeUpColorB);
+		inOutput->printf("<tr><td>RecedeUp Color</td><td>r:%02d g:%02d b:%02d</td></tr>", settings.recedeUpColorR, settings.recedeUpColorG, settings.recedeUpColorB);
 
 		// add water drip color
-		inOutput->printf("<tr><td>WaterDrip Color</td><td>r:%02.02f g:%02.02f b:%02.02f</td></tr>", settings.waterDripR, settings.waterDripG, settings.waterDripB);
+		inOutput->printf("<tr><td>WaterDrip Color</td><td>r:%02d g:%02d b:%02d</td></tr>", settings.waterDripR, settings.waterDripG, settings.waterDripB);
 
 		inOutput->printf("</table>");
 	}
@@ -239,7 +272,7 @@ private:
 		MReturnOnError(inArgC != 3, eCmd_Failed);
 
 		settings.waterDripRatePreLEDsPerSec = (float)atof(inArgV[1]);
-		settings.waterDripRatePostLEDsPerSec = (float)atof(inArgV[2]);
+		settings.waterDripRatePostLEDsPerTick = (float)atof(inArgV[2]);
 
 		EEPROMSave();
 
@@ -293,7 +326,7 @@ private:
 		settings.meanIcicleStartDripTime = 60.0f * 5.0f;
 		settings.stdIcicleStartDripTime = 60.0f * 2.0f;
 		settings.waterDripRatePreLEDsPerSec = 2.0f;
-		settings.waterDripRatePostLEDsPerSec = 4.0f;
+		settings.waterDripRatePostLEDsPerTick = 4.0f;
 		settings.growDownColorR = 64;
 		settings.growDownColorG = 64;
 		settings.growDownColorB = 250;
@@ -317,9 +350,17 @@ private:
 	UpdateModel(
 		uint32_t	inDeltaUS)
 	{
-		for(int i = 0; i < eIcicleTotal; ++i)
+		updateCumulatorUS += inDeltaUS;
+
+		uint16_t	updateSec4dot12 = uint16_t(updateCumulatorUS * (1 << 12) / 1000000);
+		if(updateSec4dot12 >= (1 << 6))
 		{
-			icicles[i].UpdateIcicleState(inDeltaUS, this);
+			for(int i = 0; i < eIcicleTotal; ++i)
+			{
+				icicles[i].UpdateIcicleState(updateSec4dot12, this);
+			}
+
+			updateCumulatorUS -= updateSec4dot12 * 1000000 / (1 << 12);
 		}
 	}
 
@@ -333,41 +374,42 @@ private:
 		{
 			int	ledIndex;
 
-			int		curDepthInt = (int)curState->curDepth;
-			float	curDepthFrac = curState->curDepth - (float)curDepthInt;
-			float	maxDepthTransition = float(curState->curMaxDepthLifeTimeMS) / float(curState->maxDepthLifeTimeMS);
+			uint32_t	curDepthMag = curState->curDepth4dot12 >> 12;
+			uint32_t	curDepthFrac8 = (curState->curDepth4dot12 >> 4) & 0xFF;
+			uint32_t	maxDepthTransition8dot8 = (uint32_t)(float(curState->curMaxDepthLifeTime4dot12) / float(curState->maxDepthLifeTime4dot12) * float(1 << 8));
 
-			int	dripLEDA = -1;
-			int	dripLEDB = -1;
-			float	dripLEDAFrac = 0.0f;
-			float	dripLEDBFrac = 0.0f;
+			uint32_t	dripLEDAMag = 0xFFFF;
+			uint32_t	dripLEDBMag = 0xFFFF;
+			uint32_t	dripLEDAFrac8 = 0;
+			uint32_t	dripLEDBFrac8 = 0;
 
-			if(curState->waterDripLoc > 0.0f)
+			if(curState->waterDripLoc4dot12 > 0)
 			{
 				// This icicle is dripping water
+				uint16_t	waterDripLoc4dot8 = curState->waterDripLoc4dot12 >> 4;
 
-				if(curState->waterDripLoc > 0.5f)
+				if(waterDripLoc4dot8 > 0x7F)
 				{
 					// Since the drip location is more than half way down an LED we can alias it across two LEDs for a smoother effect.
 
 					// Treat the water drip location as the center with half of its LED effect before the location and half after the location
-					dripLEDAFrac = curState->waterDripLoc - 0.5f;
-					dripLEDA = int(dripLEDAFrac);
-					dripLEDAFrac = 1.0f - (dripLEDAFrac - float(dripLEDA));
+					dripLEDAFrac8 = waterDripLoc4dot8 - 0x7F;
+					dripLEDAMag = dripLEDAFrac8 >> 8;
+					dripLEDAFrac8 = 0x100 - (dripLEDAFrac8 & 0xFF);
 
-					dripLEDBFrac = curState->waterDripLoc + 0.5f;
-					dripLEDB = int(dripLEDBFrac);
-					dripLEDBFrac -= float(dripLEDB);
+					dripLEDBFrac8 = waterDripLoc4dot8 + 0x7F;
+					dripLEDBMag = dripLEDBFrac8 >> 8;
+					dripLEDBFrac8 &= 0xFF;
 				}
 				else
 				{
 					// The drip location is less then half way down the first LED so only consider its effect on that LED
-					dripLEDA = int(curState->waterDripLoc);
-					dripLEDAFrac = curState->waterDripLoc - float(dripLEDA);
+					dripLEDAMag = 0;
+					dripLEDAFrac8 = waterDripLoc4dot8 & 0xFF;
 				}
 			}
 
-			for(int j = 0; j < eLEDsPerIcicle; ++j)
+			for(uint32_t j = 0; j < eLEDsPerIcicle; ++j)
 			{
 				if((i & 1) == 1)
 				{
@@ -379,83 +421,67 @@ private:
 					ledIndex = i * eLEDsPerIcicle + j;
 				}
 
-				float	r, g, b;
+				uint32_t	r8dot8, g8dot8, b8dot8;
 
-				if(j <= curDepthInt)
+				if(j <= curDepthMag)
 				{
 					// j is within the icicle
 
-					if(curState->curMaxDepthLifeTimeMS > 0)
+					if(curState->curMaxDepthLifeTime4dot12 > 0)
 					{
 						// We are transitioning from grow down to recede up
-						r = float(settings.growDownColorR) * (1.0f - maxDepthTransition) + float(settings.recedeUpColorR) * maxDepthTransition;
-						g = float(settings.growDownColorG) * (1.0f - maxDepthTransition) + float(settings.recedeUpColorG) * maxDepthTransition;
-						b = float(settings.growDownColorB) * (1.0f - maxDepthTransition) + float(settings.recedeUpColorB) * maxDepthTransition;
+						r8dot8 = settings.growDownColorR * (0x100 - maxDepthTransition8dot8) + settings.recedeUpColorR * maxDepthTransition8dot8;
+						g8dot8 = settings.growDownColorG * (0x100 - maxDepthTransition8dot8) + settings.recedeUpColorG * maxDepthTransition8dot8;
+						b8dot8 = settings.growDownColorB * (0x100 - maxDepthTransition8dot8) + settings.recedeUpColorB * maxDepthTransition8dot8;
 					}
 					else
 					{
-						// the icicle is either growing down or receding up
-						if(curState->growthRateLEDsPerSec > 0.0f)
+						// The icicle is either growing down or receding up
+						if(!(curState->growthRateLEDsPerSec4dot12 & 0x8000))
 						{
-							r = (float)settings.growDownColorR;
-							g = (float)settings.growDownColorG;
-							b = (float)settings.growDownColorB;
+							r8dot8 = settings.growDownColorR << 8;
+							g8dot8 = settings.growDownColorG << 8;
+							b8dot8 = settings.growDownColorB << 8;
 						}
 						else
 						{
-							r = (float)settings.recedeUpColorR;
-							g = (float)settings.recedeUpColorG;
-							b = (float)settings.recedeUpColorB;
+							r8dot8 = settings.recedeUpColorR << 8;
+							g8dot8 = settings.recedeUpColorG << 8;
+							b8dot8 = settings.recedeUpColorB << 8;
 						}
 					}
 						
-					if(j == curDepthInt)
+					if(j == curDepthMag)
 					{
-						r *= curDepthFrac;
-						g *= curDepthFrac;
-						b *= curDepthFrac;
+						r8dot8 = (r8dot8 * curDepthFrac8) >> 8;
+						g8dot8 = (g8dot8 * curDepthFrac8) >> 8;
+						b8dot8 = (b8dot8 * curDepthFrac8) >> 8;
 					}
 
-					if(j == dripLEDA)
+					if(j == dripLEDAMag)
 					{
-						r = r * (1.0f - dripLEDAFrac) + settings.waterDripR * dripLEDAFrac;
-						g = g * (1.0f - dripLEDAFrac) + settings.waterDripG * dripLEDAFrac;
-						b = b * (1.0f - dripLEDAFrac) + settings.waterDripB * dripLEDAFrac;
+						r8dot8 = ((r8dot8 * (0x100 - dripLEDAFrac8)) >> 8) + (settings.waterDripR * dripLEDAFrac8);
+						g8dot8 = ((g8dot8 * (0x100 - dripLEDAFrac8)) >> 8) + (settings.waterDripG * dripLEDAFrac8);
+						b8dot8 = ((b8dot8 * (0x100 - dripLEDAFrac8)) >> 8) + (settings.waterDripB * dripLEDAFrac8);
 					}
-					else if(j == dripLEDB)
+					else if(j == dripLEDBMag)
 					{
-						r = r * (1.0f - dripLEDBFrac) + settings.waterDripR * dripLEDBFrac;
-						g = g * (1.0f - dripLEDBFrac) + settings.waterDripG * dripLEDBFrac;
-						b = b * (1.0f - dripLEDBFrac) + settings.waterDripB * dripLEDBFrac;
+						r8dot8 = ((r8dot8 * (0x100 - dripLEDBFrac8)) >> 8) + (settings.waterDripR * dripLEDBFrac8);
+						g8dot8 = ((g8dot8 * (0x100 - dripLEDBFrac8)) >> 8) + (settings.waterDripG * dripLEDBFrac8);
+						b8dot8 = ((b8dot8 * (0x100 - dripLEDBFrac8)) >> 8) + (settings.waterDripB * dripLEDBFrac8);
 					}
 				}
 				else
 				{
 					// j is past the end of the icicle
-
-					if(j == dripLEDA)
-					{
-						r = 0;
-						g = 0;
-						b = 255.0f * dripLEDAFrac;
-					}
-					else if(j == dripLEDB)
-					{
-						r = 0;
-						g = 0;
-						b = 255.0f * dripLEDBFrac;
-					}
-					else
-					{
-						r = g = b = 0.0f;
-					}
+					r8dot8 = g8dot8 = b8dot8 = 0;
 				}
 
-				if(r > 255.0f) r = 255.0f;
-				if(g > 255.0f) g = 255.0f;
-				if(b > 255.0f) b = 255.0f;
+				if(r8dot8 > 0xFFFF) r8dot8 = 0xFFFF;
+				if(g8dot8 > 0xFFFF) g8dot8 = 0xFFFF;
+				if(b8dot8 > 0xFFFF) b8dot8 = 0xFFFF;
 
-				leds.setPixel(ledIndex, uint8_t(r), uint8_t(g), uint8_t(b));
+				leds.setPixel(ledIndex, uint8_t(r8dot8 >> 8), uint8_t(g8dot8 >> 8), uint8_t(b8dot8 >> 8));
 			}
 		}
 
@@ -484,7 +510,7 @@ private:
 		float	waterDripRatePreLEDsPerSec;
 
 		// This is how fast water drips after reaching the icicle depth
-		float	waterDripRatePostLEDsPerSec;
+		float	waterDripRatePostLEDsPerTick;
 
 		// This is the base color for icicles growing down
 		uint8_t	growDownColorR, growDownColorG, growDownColorB;
@@ -504,45 +530,47 @@ private:
 		{
 			SetNewState(inParent);
 			SetNextDripTime(inParent);
-			curDepth = GetRandomFloat(1.0f, maxDepth);
+			curDepth4dot12 = (uint16_t)GetRandomFloat(1.0f, maxDepth4dot12);
+			if(GetRandomInt(0, 2) == 0)
+			{
+				growthRateLEDsPerSec4dot12 = -growthRateLEDsPerSec4dot12;
+			}
 		}
 
 		void
 		UpdateIcicleState(
-			uint32_t		inDeltaUS,
+			int16_t			inUpdateSecs4dot12,
 			CModule_Icicle*	inParent)
 		{
-			uint16_t	deltaTimeMS = (uint16_t)((inDeltaUS + 500) / 1000);
-
-			if(curMaxDepthLifeTimeMS > 0)
+			if(curMaxDepthLifeTime4dot12 > 0)
 			{
-				if(curMaxDepthLifeTimeMS + deltaTimeMS < maxDepthLifeTimeMS)
+				if(curMaxDepthLifeTime4dot12 + inUpdateSecs4dot12 < maxDepthLifeTime4dot12)
 				{
-					curMaxDepthLifeTimeMS += deltaTimeMS;
+					curMaxDepthLifeTime4dot12 += inUpdateSecs4dot12;
 				}
 
 				// We are done staying at the max depth so start receding
 				else
 				{
-					growthRateLEDsPerSec = -growthRateLEDsPerSec;
-					curMaxDepthLifeTimeMS = 0;
+					growthRateLEDsPerSec4dot12 = -growthRateLEDsPerSec4dot12;
+					curMaxDepthLifeTime4dot12 = 0;
 				}
 			}
 			else
 			{
-				curDepth += growthRateLEDsPerSec * (float)inDeltaUS / 1e6f;
+				curDepth4dot12 += uint16_t((int32_t(growthRateLEDsPerSec4dot12) * int32_t(inUpdateSecs4dot12)) >> 12);
 
-				if(growthRateLEDsPerSec > 0.0f)
+				if(!(growthRateLEDsPerSec4dot12 & 0x8000))
 				{
-					if(curDepth >= maxDepth)
+					if(curDepth4dot12 >= maxDepth4dot12)
 					{
-						curMaxDepthLifeTimeMS = 1;
-						curDepth = maxDepth;
+						curMaxDepthLifeTime4dot12 = 1;
+						curDepth4dot12 = maxDepth4dot12;
 					}
 				}
 				else
 				{
-					if(curDepth <= 0.0f)
+					if(curDepth4dot12 & 0x8000)
 					{
 						SetNewState(inParent);
 					}
@@ -550,18 +578,18 @@ private:
 			}
 
 			// Check if we are dripping water
-			if(waterDripLoc > 0.0f)
+			if(waterDripLoc4dot12 > 0)
 			{
-				if(waterDripLoc < curDepth)
+				if(waterDripLoc4dot12 < curDepth4dot12)
 				{
-					waterDripLoc += inParent->settings.waterDripRatePreLEDsPerSec * (float)inDeltaUS / 1e6f;
+					waterDripLoc4dot12 += uint16_t(inParent->settings.waterDripRatePreLEDsPerSec * inUpdateSecs4dot12);
 				}
 				else
 				{
-					waterDripLoc += inParent->settings.waterDripRatePostLEDsPerSec * (float)inDeltaUS / 1e6f;
+					waterDripLoc4dot12 += uint16_t(inParent->settings.waterDripRatePostLEDsPerTick * inUpdateSecs4dot12);
 				}
 
-				if(waterDripLoc >= (float)eLEDsPerIcicle)
+				if((waterDripLoc4dot12 >> 12) >= eLEDsPerIcicle)
 				{
 					// time to reset
 					SetNextDripTime(inParent);
@@ -569,16 +597,16 @@ private:
 			}
 
 			// We are not dripping water, deduct from the next time a water drip should start
-			else if(deltaTimeMS <= nextDripTimeMS)
+			else if((inUpdateSecs4dot12 >> 4) <= nextDripTime8dot8)
 			{
-				nextDripTimeMS -= deltaTimeMS;
+				nextDripTime8dot8 -= (inUpdateSecs4dot12 >> 4);
 			}
 
 			// time to start a water drop
 			else
 			{
 				// start a drip
-				waterDripLoc = 0.001f;
+				waterDripLoc4dot12 = 1;
 			}
 		}
 
@@ -586,76 +614,78 @@ private:
 		SetNewState(
 			CModule_Icicle*	inParent)
 		{
-			curDepth = 0.0f;
-			maxDepth = GetRandomFloat(1.0f, eLEDsPerIcicle);
+			curDepth4dot12 = 0;
+			maxDepth4dot12 = uint16_t(GetRandomFloat(1.0f, eLEDsPerIcicle) * float(1 << 12));
 
-			growthRateLEDsPerSec = GetRandomFloatGuassian(inParent->settings.meanGrowRateLEDsPerSec, inParent->settings.stdGrowRateLEDsPerSec);
-			if(growthRateLEDsPerSec < 0.01f)
+			growthRateLEDsPerSec4dot12 = (uint16_t)(GetRandomFloatGuassian(inParent->settings.meanGrowRateLEDsPerSec, inParent->settings.stdGrowRateLEDsPerSec) * float(1 << 12));
+			if(growthRateLEDsPerSec4dot12 < 1)
 			{
-				growthRateLEDsPerSec = 0.01f;
+				growthRateLEDsPerSec4dot12 = 1;
 			}
-			else if(growthRateLEDsPerSec > 1.0f)
+			else if(growthRateLEDsPerSec4dot12 > 0x1000)
 			{
-				growthRateLEDsPerSec = 1.0f;
+				growthRateLEDsPerSec4dot12 = 0x1000;
 			}
+			//growthRateLEDsPerSec4dot12 = -growthRateLEDsPerSec4dot12;
 
-			maxDepth = GetRandomFloatGuassian(inParent->settings.meanPeekDepth, inParent->settings.stdPeekDepth);
-			if(maxDepth < 1.5f)
+			maxDepth4dot12 = (uint16_t)(GetRandomFloatGuassian(inParent->settings.meanPeekDepth, inParent->settings.stdPeekDepth) * float(1 << 12));
+			if(maxDepth4dot12 < 0x17FF)
 			{
-				maxDepth = 1.5f;
+				maxDepth4dot12 = 0x17FF;
 			}
-			else if(maxDepth > (float)eLEDsPerIcicle)
+			else if(maxDepth4dot12 > eLEDsPerIcicle << 12)
 			{
-				maxDepth = (float)eLEDsPerIcicle;
-			}
-
-			float	maxDepthLifeTimeFloat = GetRandomFloatGuassian(inParent->settings.meanPeekDepthLifetimeSec, inParent->settings.stdPeekDepthLifetimeSec);
-			if(maxDepthLifeTimeFloat < 1.0f)
-			{
-				maxDepthLifeTimeFloat = 1.0f;
-			}
-			else if(maxDepthLifeTimeFloat > 64.0)
-			{
-				maxDepthLifeTimeFloat = 64.0;
+				maxDepth4dot12 = eLEDsPerIcicle << 12;
 			}
 
-			maxDepthLifeTimeMS = (uint16_t)(maxDepthLifeTimeFloat * 1e3f);
-			curMaxDepthLifeTimeMS = 0;
+			maxDepthLifeTime4dot12 = (uint16_t)(GetRandomFloatGuassian(inParent->settings.meanPeekDepthLifetimeSec, inParent->settings.stdPeekDepthLifetimeSec) * float(1 << 12));
+			if(maxDepthLifeTime4dot12 < 0x1000)
+			{
+				maxDepthLifeTime4dot12 = 0x1000;
+			}
+			else if(maxDepthLifeTime4dot12 > 0x8000)
+			{
+				maxDepthLifeTime4dot12 = 0x8000;
+			}
+
+			curMaxDepthLifeTime4dot12 = 0;
 		}
 
 		void
 		SetNextDripTime(
 			CModule_Icicle*	inParent)
 		{
-			waterDripLoc = 0;
-			nextDripTimeMS = (uint16_t)(GetRandomFloatGuassian(inParent->settings.meanIcicleStartDripTime, inParent->settings.stdIcicleStartDripTime) * 1e3);
+			waterDripLoc4dot12 = 0;
+			nextDripTime8dot8 = (uint16_t)(GetRandomFloatGuassian(inParent->settings.meanIcicleStartDripTime, inParent->settings.stdIcicleStartDripTime) * float(1 << 8));
 		}
 
 		// This is the current depth in fractional LEDs, 0 is at the top and eLEDsPerIcicle is at the bottom
-		float	curDepth;
+		int16_t	curDepth4dot12;
 
 		// The grow rate in fractional LEDs
-		float	growthRateLEDsPerSec;
+		int16_t	growthRateLEDsPerSec4dot12;
 
 		// The max depth of this icicle before it starts to recede
-		float	maxDepth;
+		int16_t	maxDepth4dot12;
 
 		// The current water drip location in fractional LEDs
-		float	waterDripLoc;
+		int16_t	waterDripLoc4dot12;
 
-		// The lifetime of the icicle at the maximum depth in MS
-		uint16_t	maxDepthLifeTimeMS;
+		// The lifetime of the icicle at the maximum depth in ticks
+		uint16_t	maxDepthLifeTime4dot12;
 
-		// The current lifetime remaining at the maximum depth in MS
-		uint16_t	curMaxDepthLifeTimeMS;
+		// The current lifetime remaining at the maximum depth in ticks
+		uint16_t	curMaxDepthLifeTime4dot12;
 
 		// The next water drip time in MS
-		uint16_t	nextDripTimeMS;
+		uint16_t	nextDripTime8dot8;
 	};
 
 	OctoWS2811		leds;
 	SIcicleState	icicles[eIcicleTotal];
 	SSettings		settings;
+
+	uint32_t		updateCumulatorUS;
 
 	bool	ledsOn;
 };
