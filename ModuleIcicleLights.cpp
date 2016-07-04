@@ -62,6 +62,10 @@ enum
 	eESP8266ResetPint = 23,
 
 	eUpdateTimeUS = 30000,
+
+	eRenderMode_Static = 0,
+	eRenderMode_Dynamic = 1,
+	eRenderMode_Rain = 2,
 };
 
 DMAMEM int		gIcicleLEDDisplayMemory[eLEDsPerStrip * 6];
@@ -122,6 +126,8 @@ private:
 		MCommandRegister("driprate_set", CModule_Icicle::DripRateSet, "[pre rate] [post rate]: Set the drip rate");
 		MCommandRegister("growcolor_set", CModule_Icicle::GrowDownColorSet, "[r] [g] [b]: Set the grow down color");
 		MCommandRegister("recedecolor_set", CModule_Icicle::RecedeUpColorSet, "[r] [g] [b]: Set the recede up color");
+		MCommandRegister("staticcolor_set", CModule_Icicle::StaticColorSet, "[r] [g] [b]: Set the static color");
+		MCommandRegister("rendermode_set", CModule_Icicle::RenderModeSet, "[dynamic | static]: Set the render mode");
 
 		leds.begin();
 
@@ -168,6 +174,9 @@ private:
 
 		// add water drip color
 		inOutput->printf("<tr><td>WaterDrip Color</td><td>r:%02d g:%02d b:%02d</td></tr>", settings.waterDripR, settings.waterDripG, settings.waterDripB);
+
+		// add static color
+		inOutput->printf("<tr><td>Static Color</td><td>r:%02d g:%02d b:%02d</td></tr>", settings.staticR, settings.staticG, settings.staticB);
 
 		inOutput->printf("</table>");
 	}
@@ -313,6 +322,49 @@ private:
 		return eCmd_Succeeded;
 	}
 
+	uint8_t
+	StaticColorSet(
+		IOutputDirector*	inOutput,
+		int					inArgC,
+		char const*			inArgV[])
+	{
+		MReturnOnError(inArgC != 3, eCmd_Failed);
+		
+		settings.staticR = (uint8_t)(atof(inArgV[1]) * 255.0);
+		settings.staticG = (uint8_t)(atof(inArgV[2]) * 255.0);
+		settings.staticB = (uint8_t)(atof(inArgV[3]) * 255.0);
+
+		EEPROMSave();
+
+		return eCmd_Succeeded;
+	}
+
+	uint8_t
+	RenderModeSet(
+		IOutputDirector*	inOutput,
+		int					inArgC,
+		char const*			inArgV[])
+	{
+		MReturnOnError(inArgC != 2, eCmd_Failed);
+
+		if(strcmp(inArgV[1], "dynamic") == 0)
+		{
+			settings.renderMode = eRenderMode_Dynamic;
+		}
+		else if(strcmp(inArgV[1], "static") == 0)
+		{
+			settings.renderMode = eRenderMode_Static;
+		}
+		else if(strcmp(inArgV[1], "rain") == 0)
+		{
+			settings.renderMode = eRenderMode_Rain;
+		}
+
+		EEPROMSave();
+
+		return eCmd_Succeeded;
+	}
+
 	virtual void
 	EEPROMInitialize(
 		void)
@@ -336,14 +388,25 @@ private:
 		settings.waterDripR = 0;
 		settings.waterDripG = 0;
 		settings.waterDripB = 0xFF;
+		settings.staticR = 0xFF;
+		settings.staticG = 0xFF;
+		settings.staticB = 0x80;
+		settings.renderMode = eRenderMode_Dynamic;
 	}
 
 	virtual void
 	Update(
 		uint32_t	inDeltaUS)
 	{
-		UpdateModel(inDeltaUS);
-		Render();
+		if(settings.renderMode == eRenderMode_Dynamic)
+		{
+			UpdateModel(inDeltaUS);
+			RenderDynamic();
+		}
+		else if(settings.renderMode == eRenderMode_Static)
+		{
+			RenderStatic();
+		}
 	}
 
 	void
@@ -365,7 +428,54 @@ private:
 	}
 
 	void
-	Render(
+	RenderStatic(
+		void)
+	{
+		for(int i = 0; i < eIcicleTotal; ++i)
+		{
+			int	ledIndex;
+
+			uint8_t	depth;
+			
+			static uint8_t	gTable[] = {2, 3, 4, 2, 3};
+			depth = gTable[i % (sizeof(gTable) / sizeof(gTable[0]))];
+
+			for(uint32_t j = 0; j < eLEDsPerIcicle; ++j)
+			{
+				if((i & 1) == 1)
+				{
+					// odd icicles have reverse ordering
+					ledIndex = (i + 1) * eLEDsPerIcicle - j - 1;
+				}
+				else
+				{
+					ledIndex = i * eLEDsPerIcicle + j;
+				}
+
+				MAssert(ledIndex < eLEDsPerStrip * 8);
+
+				uint8_t	r, g, b;
+
+				if(j <= depth)
+				{
+					r = settings.staticR;
+					g = settings.staticG;
+					b = settings.staticB;
+				}
+				else
+				{
+					r = 0; g = 0; b = 0;
+				}
+
+				leds.setPixel(ledIndex, r, g, b);
+			}
+		}
+
+		leds.show();
+	}
+
+	void
+	RenderDynamic(
 		void)
 	{
 		SIcicleState*	curState = icicles;
@@ -376,7 +486,6 @@ private:
 
 			uint32_t	curDepthMag = curState->curDepth4dot12 >> 12;
 			uint32_t	curDepthFrac8 = (curState->curDepth4dot12 >> 4) & 0xFF;
-			uint32_t	maxDepthTransition8dot8 = (uint32_t)(float(curState->curMaxDepthLifeTime4dot12) / float(curState->maxDepthLifeTime4dot12) * float(1 << 8));
 
 			uint32_t	dripLEDAMag = 0xFFFF;
 			uint32_t	dripLEDBMag = 0xFFFF;
@@ -429,6 +538,7 @@ private:
 
 					if(curState->curMaxDepthLifeTime4dot12 > 0)
 					{
+						uint32_t	maxDepthTransition8dot8 = (uint32_t(curState->curMaxDepthLifeTime4dot12) << 8) / uint32_t(curState->maxDepthLifeTime4dot12);
 						// We are transitioning from grow down to recede up
 						r8dot8 = settings.growDownColorR * (0x100 - maxDepthTransition8dot8) + settings.recedeUpColorR * maxDepthTransition8dot8;
 						g8dot8 = settings.growDownColorG * (0x100 - maxDepthTransition8dot8) + settings.recedeUpColorG * maxDepthTransition8dot8;
@@ -481,6 +591,7 @@ private:
 				if(g8dot8 > 0xFFFF) g8dot8 = 0xFFFF;
 				if(b8dot8 > 0xFFFF) b8dot8 = 0xFFFF;
 
+				MAssert(ledIndex < eLEDsPerStrip * 8);
 				leds.setPixel(ledIndex, uint8_t(r8dot8 >> 8), uint8_t(g8dot8 >> 8), uint8_t(b8dot8 >> 8));
 			}
 		}
@@ -520,6 +631,11 @@ private:
 
 		// This is the color for water drops
 		uint8_t	waterDripR, waterDripG, waterDripB;
+
+		// This is the color for static display
+		uint8_t	staticR, staticG, staticB;
+
+		uint8_t	renderMode;
 	};
 
 	struct SIcicleState
@@ -643,9 +759,9 @@ private:
 			{
 				maxDepthLifeTime4dot12 = 0x1000;
 			}
-			else if(maxDepthLifeTime4dot12 > 0x8000)
+			else if(maxDepthLifeTime4dot12 > 0x7000)
 			{
-				maxDepthLifeTime4dot12 = 0x8000;
+				maxDepthLifeTime4dot12 = 0x7000;
 			}
 
 			curMaxDepthLifeTime4dot12 = 0;
@@ -686,6 +802,9 @@ private:
 	SSettings		settings;
 
 	uint32_t		updateCumulatorUS;
+
+	uint16_t	icicleIndex;
+	uint8_t		renderOrStateUpdate;
 
 	bool	ledsOn;
 };
