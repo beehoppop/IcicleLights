@@ -102,6 +102,7 @@ private:
 		gRealTime->Configure(ds3234Provider, 24 * 60 * 60);
 
 		updateCumulatorUS = 0;
+		ledsOn = false;
 	}
 
 	virtual void
@@ -124,9 +125,10 @@ private:
 		MCommandRegister("peekduration_set", CModule_Icicle::PeekDepthLifeDistributionSet, "[mean] [std dev]: Set the duration distribution at the peek depth");
 		MCommandRegister("driptime_set", CModule_Icicle::DripStartTimeDistributionSet, "[mean] [std dev]: Set the drip start distribution");
 		MCommandRegister("driprate_set", CModule_Icicle::DripRateSet, "[pre rate] [post rate]: Set the drip rate");
-		MCommandRegister("growcolor_set", CModule_Icicle::GrowDownColorSet, "[r] [g] [b]: Set the grow down color");
-		MCommandRegister("recedecolor_set", CModule_Icicle::RecedeUpColorSet, "[r] [g] [b]: Set the recede up color");
-		MCommandRegister("staticcolor_set", CModule_Icicle::StaticColorSet, "[r] [g] [b]: Set the static color");
+		MCommandRegister("growcolor_set", CModule_Icicle::GrowDownColorSet, "[r] [g] [b]: Set the grow down color range 0.0 -> 1.0");
+		MCommandRegister("recedecolor_set", CModule_Icicle::RecedeUpColorSet, "[r] [g] [b]: Set the recede up color range 0.0 -> 1.0");
+		MCommandRegister("staticcolor_set", CModule_Icicle::StaticColorSet, "[r] [g] [b]: Set the static color range 0.0 -> 1.0");
+		MCommandRegister("staticintensity_set", CModule_Icicle::StaticIntensitySet, "[intensity]: Set the static intensity 0.0 -> 1.0");
 		MCommandRegister("rendermode_set", CModule_Icicle::RenderModeSet, "[dynamic | static]: Set the render mode");
 
 		leds.begin();
@@ -177,6 +179,9 @@ private:
 
 		// add static color
 		inOutput->printf("<tr><td>Static Color</td><td>r:%02d g:%02d b:%02d</td></tr>", settings.staticR, settings.staticG, settings.staticB);
+
+		// add static intensity
+		inOutput->printf("<tr><td>Static Intensity</td><td>%1.2f</td></tr>", settings.staticIntensity);
 
 		inOutput->printf("</table>");
 	}
@@ -241,7 +246,8 @@ private:
 		return eCmd_Succeeded;
 	}
 
-	uint8_t PeekDepthLifeDistributionSet(
+	uint8_t 
+	PeekDepthLifeDistributionSet(
 		IOutputDirector* inOutput,
 		int inArgC,
 		char const* inArgV[])
@@ -294,7 +300,7 @@ private:
 		int					inArgC,
 		char const*			inArgV[])
 	{
-		MReturnOnError(inArgC != 3, eCmd_Failed);
+		MReturnOnError(inArgC != 4, eCmd_Failed);
 		
 		settings.growDownColorR = (uint8_t)(atof(inArgV[1]) * 255.0);
 		settings.growDownColorG = (uint8_t)(atof(inArgV[2]) * 255.0);
@@ -311,7 +317,7 @@ private:
 		int					inArgC,
 		char const*			inArgV[])
 	{
-		MReturnOnError(inArgC != 3, eCmd_Failed);
+		MReturnOnError(inArgC != 4, eCmd_Failed);
 		
 		settings.recedeUpColorR = (uint8_t)(atof(inArgV[1]) * 255.0);
 		settings.recedeUpColorG = (uint8_t)(atof(inArgV[2]) * 255.0);
@@ -328,11 +334,26 @@ private:
 		int					inArgC,
 		char const*			inArgV[])
 	{
-		MReturnOnError(inArgC != 3, eCmd_Failed);
+		MReturnOnError(inArgC != 4, eCmd_Failed);
 		
 		settings.staticR = (uint8_t)(atof(inArgV[1]) * 255.0);
 		settings.staticG = (uint8_t)(atof(inArgV[2]) * 255.0);
 		settings.staticB = (uint8_t)(atof(inArgV[3]) * 255.0);
+
+		EEPROMSave();
+
+		return eCmd_Succeeded;
+	}
+
+	uint8_t
+	StaticIntensitySet(
+		IOutputDirector*	inOutput,
+		int					inArgC,
+		char const*			inArgV[])
+	{
+		MReturnOnError(inArgC != 2, eCmd_Failed);
+		
+		settings.staticIntensity = (float)atof(inArgV[1]);
 
 		EEPROMSave();
 
@@ -379,6 +400,7 @@ private:
 		settings.stdIcicleStartDripTime = 60.0f * 2.0f;
 		settings.waterDripRatePreLEDsPerSec = 2.0f;
 		settings.waterDripRatePostLEDsPerTick = 4.0f;
+		settings.staticIntensity = 1.0f;
 		settings.growDownColorR = 64;
 		settings.growDownColorG = 64;
 		settings.growDownColorB = 250;
@@ -398,14 +420,25 @@ private:
 	Update(
 		uint32_t	inDeltaUS)
 	{
-		if(settings.renderMode == eRenderMode_Dynamic)
+		if(ledsOn == false)
 		{
-			UpdateModel(inDeltaUS);
-			RenderDynamic();
+			for(int i = 0; i < eLEDsPerStrip * 8; ++i)
+			{
+				leds.setPixel(i, 0, 0, 0);
+			}
+			leds.show();
 		}
-		else if(settings.renderMode == eRenderMode_Static)
+		else
 		{
-			RenderStatic();
+			if(settings.renderMode == eRenderMode_Dynamic)
+			{
+				UpdateModel(inDeltaUS);
+				RenderDynamic();
+			}
+			else if(settings.renderMode == eRenderMode_Static)
+			{
+				RenderStatic();
+			}
 		}
 	}
 
@@ -431,6 +464,10 @@ private:
 	RenderStatic(
 		void)
 	{
+		uint8_t	staticR = (uint8_t)((float)settings.staticR * settings.staticIntensity);
+		uint8_t	staticG = (uint8_t)((float)settings.staticG * settings.staticIntensity);
+		uint8_t	staticB = (uint8_t)((float)settings.staticB * settings.staticIntensity);
+
 		for(int i = 0; i < eIcicleTotal; ++i)
 		{
 			int	ledIndex;
@@ -458,9 +495,9 @@ private:
 
 				if(j <= depth)
 				{
-					r = settings.staticR;
-					g = settings.staticG;
-					b = settings.staticB;
+					r = staticR;
+					g = staticG;
+					b = staticB;
 				}
 				else
 				{
@@ -622,6 +659,9 @@ private:
 
 		// This is how fast water drips after reaching the icicle depth
 		float	waterDripRatePostLEDsPerTick;
+
+		// This is the intensity of the static color render mode
+		float	staticIntensity;
 
 		// This is the base color for icicles growing down
 		uint8_t	growDownColorR, growDownColorG, growDownColorB;
