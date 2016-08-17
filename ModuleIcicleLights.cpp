@@ -54,7 +54,8 @@ enum
 	eIciclesPerStrip = 108,
 	eLEDsPerIcicle = 5,
 	eLEDsPerStrip = eIciclesPerStrip * eLEDsPerIcicle,
-	eIcicleTotal = eIciclesPerStrip * 8,
+	eStripCount = 8,
+	eIcicleTotal = eIciclesPerStrip * eStripCount,
 
 	eToggleButtonPin = 9,
 	eTransformerRelayPin = 17,
@@ -63,9 +64,34 @@ enum
 
 	eUpdateTimeUS = 30000,
 
-	eRenderMode_Static = 0,
-	eRenderMode_Dynamic = 1,
-	eRenderMode_Rain = 2,
+	eRenderMode_StaticIce = 0,
+	eRenderMode_DynamicIce = 1,
+	eRenderMode_Test = 2,
+
+	eTestMode_AllOn = 0,
+	eTestMode_AllOff = 1,
+	eTestMode_Icicle = 2,
+	eTestMode_Strand = 3
+};
+
+static char const* gRenderModeStr[] = {"static", "dynamic", "test"};
+static char const* gTestModeStr[] = {"AllOn", "AllOff", "Icicle", "Strand"};
+
+struct SColorEntry
+{
+	float	r, g, b;
+};
+
+SColorEntry	gColorTable[8] = 
+{
+	{1.0f, 0.0f, 0.0f},
+	{0.0f, 1.0f, 0.0f},
+	{0.0f, 0.0f, 1.0f},
+	{1.0f, 0.0f, 1.0f},
+	{1.0f, 1.0f, 0.0f},
+	{0.0f, 1.0f, 1.0f},
+	{1.0f, 1.0f, 1.0f},
+	{1.0f, 0.5f, 0.25f},
 };
 
 DMAMEM int		gIcicleLEDDisplayMemory[eLEDsPerStrip * 6];
@@ -88,9 +114,9 @@ private:
 			eUpdateTimeUS),
 		leds(eLEDsPerStrip, gIcicleLEDDisplayMemory, NULL, WS2811_RGB)
 	{
-		IInternetDevice*		internetDevice = CModule_ESP8266::Include(3, &Serial1, eESP8266ResetPint);
+		IInternetDevice*		internetDevice = CModule_ESP8266::Include(5, &Serial1, eESP8266ResetPint);
 		IRealTimeDataProvider*	ds3234Provider = CreateDS3234Provider(10);
-		CModule_Loggly*			loggly = CModule_Loggly::Include("pergola", "logs-01.loggly.com", "/inputs/568b321d-0d6f-47d3-ac34-4a36f4125612");
+		CModule_Loggly*			loggly = CModule_Loggly::Include("pergola2", "logs-01.loggly.com", "/inputs/568b321d-0d6f-47d3-ac34-4a36f4125612");
 		
 		CModule_RealTime::Include();
 		CModule_Internet::Include();
@@ -130,6 +156,7 @@ private:
 		MCommandRegister("staticcolor_set", CModule_Icicle::StaticColorSet, "[r] [g] [b]: Set the static color range 0.0 -> 1.0");
 		MCommandRegister("staticintensity_set", CModule_Icicle::StaticIntensitySet, "[intensity]: Set the static intensity 0.0 -> 1.0");
 		MCommandRegister("rendermode_set", CModule_Icicle::RenderModeSet, "[dynamic | static]: Set the render mode");
+		MCommandRegister("testmode_set", CModule_Icicle::TestModeSet, "[allon | alloff | icicle | strand]: Set the test mode");
 
 		leds.begin();
 
@@ -149,6 +176,12 @@ private:
 
 		inOutput->printf("<table border=\"1\">");
 		inOutput->printf("<tr><th>Parameter</th><th>Value</th></tr>");
+
+		// add render mode
+		inOutput->printf("<tr><td>RenderMode</td><td>%s</td></tr>", gRenderModeStr[settings.renderMode]);
+
+		// add test mode
+		inOutput->printf("<tr><td>TestMode</td><td>%s</td></tr>", settings.renderMode == eRenderMode_Test ? gTestModeStr[testMode] : "off");
 
 		// add grow rate
 		inOutput->printf("<tr><td>GrowRate</td><td>%2.2f %2.2f</td></tr>", settings.meanGrowRateLEDsPerSec, settings.stdGrowRateLEDsPerSec);
@@ -368,20 +401,58 @@ private:
 	{
 		MReturnOnError(inArgC != 2, eCmd_Failed);
 
-		if(strcmp(inArgV[1], "dynamic") == 0)
+		if(strcmp(inArgV[1], "dynamicice") == 0)
 		{
-			settings.renderMode = eRenderMode_Dynamic;
+			settings.renderMode = eRenderMode_DynamicIce;
 		}
-		else if(strcmp(inArgV[1], "static") == 0)
+		else if(strcmp(inArgV[1], "staticice") == 0)
 		{
-			settings.renderMode = eRenderMode_Static;
+			settings.renderMode = eRenderMode_StaticIce;
 		}
-		else if(strcmp(inArgV[1], "rain") == 0)
+		else if(strcmp(inArgV[1], "test") == 0)
 		{
-			settings.renderMode = eRenderMode_Rain;
+			settings.renderMode = eRenderMode_Test;
+		}
+		else
+		{
+			return eCmd_Failed;
 		}
 
 		EEPROMSave();
+
+		return eCmd_Succeeded;
+	}
+
+	uint8_t
+	TestModeSet(
+		IOutputDirector*	inOutput,
+		int					inArgC,
+		char const*			inArgV[])
+	{
+		MReturnOnError(inArgC != 2, eCmd_Failed);
+
+		if(strcmp(inArgV[1], "allon") == 0)
+		{
+			testMode = eTestMode_AllOn;
+		}
+		else if(strcmp(inArgV[1], "alloff") == 0)
+		{
+			testMode = eTestMode_AllOff;
+		}
+		else if(strcmp(inArgV[1], "icicle") == 0)
+		{
+			testMode = eTestMode_Icicle;
+		}
+		else if(strcmp(inArgV[1], "strand") == 0)
+		{
+			testMode = eTestMode_Strand;
+		}
+		else
+		{
+			return eCmd_Failed;
+		}
+
+		settings.renderMode = eRenderMode_Test;
 
 		return eCmd_Succeeded;
 	}
@@ -413,7 +484,7 @@ private:
 		settings.staticR = 0xFF;
 		settings.staticG = 0xFF;
 		settings.staticB = 0x80;
-		settings.renderMode = eRenderMode_Dynamic;
+		settings.renderMode = eRenderMode_DynamicIce;
 	}
 
 	virtual void
@@ -430,14 +501,18 @@ private:
 		}
 		else
 		{
-			if(settings.renderMode == eRenderMode_Dynamic)
+			if(settings.renderMode == eRenderMode_DynamicIce)
 			{
 				UpdateModel(inDeltaUS);
 				RenderDynamic();
 			}
-			else if(settings.renderMode == eRenderMode_Static)
+			else if(settings.renderMode == eRenderMode_StaticIce)
 			{
 				RenderStatic();
+			}
+			else if(settings.renderMode == eRenderMode_Test)
+			{
+				RenderTest();
 			}
 		}
 	}
@@ -507,6 +582,112 @@ private:
 				leds.setPixel(ledIndex, r, g, b);
 			}
 		}
+
+		leds.show();
+	}
+
+	void
+	RenderTest(
+		void)
+	{
+
+		switch(testMode)
+		{
+			case eTestMode_AllOn:
+			{
+				uint8_t	staticR = (uint8_t)((float)settings.staticR * settings.staticIntensity);
+				uint8_t	staticG = (uint8_t)((float)settings.staticG * settings.staticIntensity);
+				uint8_t	staticB = (uint8_t)((float)settings.staticB * settings.staticIntensity);
+
+				for(int i = 0; i < eIcicleTotal; ++i)
+				{
+					int	ledIndex;
+
+					for(uint32_t j = 0; j < eLEDsPerIcicle; ++j)
+					{
+						if((i & 1) == 1)
+						{
+							// odd icicles have reverse ordering
+							ledIndex = (i + 1) * eLEDsPerIcicle - j - 1;
+						}
+						else
+						{
+							ledIndex = i * eLEDsPerIcicle + j;
+						}
+
+						leds.setPixel(ledIndex, staticR, staticG, staticB);
+					}
+				}
+				break;
+			}
+
+			case eTestMode_AllOff:
+				for(int i = 0; i < eIcicleTotal; ++i)
+				{
+					int	ledIndex;
+			
+					for(uint32_t j = 0; j < eLEDsPerIcicle; ++j)
+					{
+						if((i & 1) == 1)
+						{
+							// odd icicles have reverse ordering
+							ledIndex = (i + 1) * eLEDsPerIcicle - j - 1;
+						}
+						else
+						{
+							ledIndex = i * eLEDsPerIcicle + j;
+						}
+
+						leds.setPixel(ledIndex, 0, 0, 0);
+					}
+				}
+				break;
+
+			case eTestMode_Icicle:
+				for(int i = 0; i < eIcicleTotal; ++i)
+				{
+					int	ledIndex;
+			
+					for(uint32_t j = 0; j < eLEDsPerIcicle; ++j)
+					{
+						if((i & 1) == 1)
+						{
+							// odd icicles have reverse ordering
+							ledIndex = (i + 1) * eLEDsPerIcicle - j - 1;
+						}
+						else
+						{
+							ledIndex = i * eLEDsPerIcicle + j;
+						}
+
+						uint8_t	r, g, b;
+
+						r = (uint8_t)(gColorTable[j].r * settings.staticIntensity * 255.0f);
+						g = (uint8_t)(gColorTable[j].g * settings.staticIntensity * 255.0f);
+						b = (uint8_t)(gColorTable[j].b * settings.staticIntensity * 255.0f);
+
+						leds.setPixel(ledIndex, r, g, b);
+					}
+				}
+				break;
+
+			case eTestMode_Strand:
+				for(int i = 0; i < eStripCount; ++i)
+				{
+					uint8_t	r, g, b;
+
+					r = (uint8_t)(gColorTable[i].r * settings.staticIntensity * 255.0f);
+					g = (uint8_t)(gColorTable[i].g * settings.staticIntensity * 255.0f);
+					b = (uint8_t)(gColorTable[i].b * settings.staticIntensity * 255.0f);
+
+					for(int j = 0; j < eLEDsPerStrip; ++j)
+					{
+						leds.setPixel(i * eLEDsPerStrip + j, r, g, b);
+					}
+				}
+				break;
+		}
+
 
 		leds.show();
 	}
@@ -845,6 +1026,7 @@ private:
 
 	uint16_t	icicleIndex;
 	uint8_t		renderOrStateUpdate;
+	uint8_t		testMode;
 
 	bool	ledsOn;
 };

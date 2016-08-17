@@ -20,8 +20,6 @@
 #include <ELAssert.h>
 #include <EL.h>
 
-RamMonitor	gRamMonitor;
-
 void
 SetupIcicleModule(
 	void);
@@ -30,20 +28,21 @@ void
 setup(
 	void)
 {
-	Serial.begin(115200);
+	//Serial.begin(115200);
 
-	//WaitForSerialPort();
+	WaitForSerialPort();
 
-	new CModule_Internet();
-	new CModule_RealTime();
-	new CModule_SerialCmdHandler();
-	new CModule_SysMsgCmdHandler();
+	Serial.printf("free=%lu\n", GetFreeMemory());
+
+	CModule_SysMsgSerialHandler::Include();
+	CModule_SerialCmdHandler::Include();
+	CModule_SysMsgCmdHandler::Include();
 
 	SetupIcicleModule();
 
-	Serial.printf("free=%lu\n", gRamMonitor.unallocated());
-
 	CModule::SetupAll("v0.1", false);
+
+	Serial.printf("free=%lu\n", GetFreeMemory());
 }
 
 void
