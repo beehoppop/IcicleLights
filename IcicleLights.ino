@@ -30,7 +30,7 @@ setup(
 {
 	//Serial.begin(115200);
 
-	WaitForSerialPort();
+	//WaitForSerialPort();
 
 	Serial.printf("free=%lu\n", GetFreeMemory());
 
