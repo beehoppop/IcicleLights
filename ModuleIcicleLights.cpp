@@ -66,16 +66,19 @@ enum
 
 	eRenderMode_StaticIce = 0,
 	eRenderMode_DynamicIce = 1,
-	eRenderMode_Test = 2,
+	eRenderMode_AllOn = 2,
+	eRenderMode_Test = 3,
+	eRenderMode_Count = 4,
 
 	eTestMode_AllOn = 0,
 	eTestMode_AllOff = 1,
 	eTestMode_Icicle = 2,
-	eTestMode_Strand = 3
+	eTestMode_Strand = 3,
+	eTestMode_Count = 4
 };
 
-static char const* gRenderModeStr[] = {"static", "dynamic", "test"};
-static char const* gTestModeStr[] = {"AllOn", "AllOff", "Icicle", "Strand"};
+static char const* gRenderModeStr[] = {"staticice", "dynamicice", "allon", "test"};
+static char const* gTestModeStr[] = {"allon", "alloff", "icicle", "strand"};
 
 struct SColorEntry
 {
@@ -136,8 +139,8 @@ private:
 		void)
 	{
 		// Instantiate the wireless networking device and configure it to server pages
-		gInternetModule->CommandServer_Start(8080);
-		MInternetRegisterFrontPage(CModule_Icicle::CommandHomePageHandler);
+		gInternetModule->WebServer_Start(8080);
+		MInternetRegisterPage("/", CModule_Icicle::CommandHomePageHandler);
 
 		for(int i = 0; i < eIcicleTotal; ++i)
 		{
@@ -170,7 +173,9 @@ private:
 
 	void
 	CommandHomePageHandler(
-		IOutputDirector*	inOutput)
+		IOutputDirector*	inOutput,
+		int					inParamCount,
+		char const**		inParamList)
 	{
 		// Send html via in Output to add to the command server home page served to clients
 
@@ -202,16 +207,16 @@ private:
 		inOutput->printf("<tr><td>DripRate PostIcicleEnd</td><td>%2.2f</td></tr>", settings.waterDripRatePostLEDsPerTick);
 
 		// add grow down color
-		inOutput->printf("<tr><td>GrowDown Color</td><td>r:%02d g:%02d b:%02d</td></tr>", settings.growDownColorR, settings.growDownColorG, settings.growDownColorB);
+		inOutput->printf("<tr><td>GrowDown Color</td><td>r:%1.3f g:%1.3f b:%1.3f</td></tr>", (float)settings.growDownColorR / 255.0f, (float)settings.growDownColorG / 255.0f, (float)settings.growDownColorB / 255.0f);
 
 		// add recede up color
-		inOutput->printf("<tr><td>RecedeUp Color</td><td>r:%02d g:%02d b:%02d</td></tr>", settings.recedeUpColorR, settings.recedeUpColorG, settings.recedeUpColorB);
+		inOutput->printf("<tr><td>RecedeUp Color</td><td>r:%1.3f g:%1.3f b:%1.3f</td></tr>", (float)settings.recedeUpColorR / 255.0f, (float)settings.recedeUpColorG / 255.0f, (float)settings.recedeUpColorB / 255.0f);
 
 		// add water drip color
-		inOutput->printf("<tr><td>WaterDrip Color</td><td>r:%02d g:%02d b:%02d</td></tr>", settings.waterDripR, settings.waterDripG, settings.waterDripB);
+		inOutput->printf("<tr><td>WaterDrip Color</td><td>r:%1.3f g:%1.3f b:%1.3f</td></tr>", (float)settings.waterDripR / 255.0f, (float)settings.waterDripG / 255.0f, (float)settings.waterDripB / 255.0f);
 
 		// add static color
-		inOutput->printf("<tr><td>Static Color</td><td>r:%02d g:%02d b:%02d</td></tr>", settings.staticR, settings.staticG, settings.staticB);
+		inOutput->printf("<tr><td>Static Color</td><td>r:%1.3f g:%1.3f b:%1.3f</td></tr>", (float)settings.staticR / 255.0f, (float)settings.staticG / 255.0f, (float)settings.staticB / 255.0f);
 
 		// add static intensity
 		inOutput->printf("<tr><td>Static Intensity</td><td>%1.2f</td></tr>", settings.staticIntensity);
@@ -401,19 +406,16 @@ private:
 	{
 		MReturnOnError(inArgC != 2, eCmd_Failed);
 
-		if(strcmp(inArgV[1], "dynamicice") == 0)
+		int i;
+		for(i = 0; i < eRenderMode_Count; ++i)
 		{
-			settings.renderMode = eRenderMode_DynamicIce;
+			if (strcmp(inArgV[1], gRenderModeStr[i]) == 0)
+			{
+				settings.renderMode = (uint8_t)i;
+			}
 		}
-		else if(strcmp(inArgV[1], "staticice") == 0)
-		{
-			settings.renderMode = eRenderMode_StaticIce;
-		}
-		else if(strcmp(inArgV[1], "test") == 0)
-		{
-			settings.renderMode = eRenderMode_Test;
-		}
-		else
+
+		if(i >= eRenderMode_Count)
 		{
 			return eCmd_Failed;
 		}
@@ -431,23 +433,16 @@ private:
 	{
 		MReturnOnError(inArgC != 2, eCmd_Failed);
 
-		if(strcmp(inArgV[1], "allon") == 0)
+		int i;
+		for (i = 0; i < eRenderMode_Count; ++i)
 		{
-			testMode = eTestMode_AllOn;
+			if (strcmp(inArgV[1], gTestModeStr[i]) == 0)
+			{
+				testMode = (uint8_t)i;
+			}
 		}
-		else if(strcmp(inArgV[1], "alloff") == 0)
-		{
-			testMode = eTestMode_AllOff;
-		}
-		else if(strcmp(inArgV[1], "icicle") == 0)
-		{
-			testMode = eTestMode_Icicle;
-		}
-		else if(strcmp(inArgV[1], "strand") == 0)
-		{
-			testMode = eTestMode_Strand;
-		}
-		else
+
+		if (i >= eRenderMode_Count)
 		{
 			return eCmd_Failed;
 		}
@@ -506,9 +501,13 @@ private:
 				UpdateModel(inDeltaUS);
 				RenderDynamic();
 			}
-			else if(settings.renderMode == eRenderMode_StaticIce)
+			else if (settings.renderMode == eRenderMode_StaticIce)
 			{
 				RenderStatic();
+			}
+			else if (settings.renderMode == eRenderMode_AllOn)
+			{
+				RenderTest();
 			}
 			else if(settings.renderMode == eRenderMode_Test)
 			{
@@ -587,6 +586,35 @@ private:
 	}
 
 	void
+	RenderAllOn(
+		void)
+	{
+		uint8_t	staticR = (uint8_t)((float)settings.staticR * settings.staticIntensity);
+		uint8_t	staticG = (uint8_t)((float)settings.staticG * settings.staticIntensity);
+		uint8_t	staticB = (uint8_t)((float)settings.staticB * settings.staticIntensity);
+
+		for(int i = 0; i < eIcicleTotal; ++i)
+		{
+			int	ledIndex;
+
+			for(uint32_t j = 0; j < eLEDsPerIcicle; ++j)
+			{
+				if((i & 1) == 1)
+				{
+					// odd icicles have reverse ordering
+					ledIndex = (i + 1) * eLEDsPerIcicle - j - 1;
+				}
+				else
+				{
+					ledIndex = i * eLEDsPerIcicle + j;
+				}
+
+				leds.setPixel(ledIndex, staticR, staticG, staticB);
+			}
+		}
+	}
+
+	void
 	RenderTest(
 		void)
 	{
@@ -595,10 +623,6 @@ private:
 		{
 			case eTestMode_AllOn:
 			{
-				uint8_t	staticR = (uint8_t)((float)settings.staticR * settings.staticIntensity);
-				uint8_t	staticG = (uint8_t)((float)settings.staticG * settings.staticIntensity);
-				uint8_t	staticB = (uint8_t)((float)settings.staticB * settings.staticIntensity);
-
 				for(int i = 0; i < eIcicleTotal; ++i)
 				{
 					int	ledIndex;
@@ -615,7 +639,7 @@ private:
 							ledIndex = i * eLEDsPerIcicle + j;
 						}
 
-						leds.setPixel(ledIndex, staticR, staticG, staticB);
+						leds.setPixel(ledIndex, 255, 255, 255);
 					}
 				}
 				break;
