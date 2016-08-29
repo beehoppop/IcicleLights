@@ -67,18 +67,13 @@ enum
 	eRenderMode_StaticIce = 0,
 	eRenderMode_DynamicIce = 1,
 	eRenderMode_AllOn = 2,
-	eRenderMode_Test = 3,
-	eRenderMode_Count = 4,
-
-	eTestMode_AllOn = 0,
-	eTestMode_AllOff = 1,
-	eTestMode_Icicle = 2,
-	eTestMode_Strand = 3,
-	eTestMode_Count = 4
+	eRenderMode_AllOff = 3,
+	eRenderMode_Festive = 4,
+	eRenderMode_Strand = 5,
+	eRenderMode_Count = 6,
 };
 
-static char const* gRenderModeStr[] = {"staticice", "dynamicice", "allon", "test"};
-static char const* gTestModeStr[] = {"allon", "alloff", "icicle", "strand"};
+static char const* gRenderModeStr[] = {"staticice", "dynamicice", "allon", "alloff", "festive", "stand"};
 
 struct SColorEntry
 {
@@ -141,11 +136,9 @@ private:
 		// Instantiate the wireless networking device and configure it to server pages
 		gInternetModule->WebServer_Start(8080);
 		MInternetRegisterPage("/", CModule_Icicle::CommandHomePageHandler);
+		MInternetRegisterPage("/rendermode", CModule_Icicle::CommandRenderModePageHandler);
 
-		for(int i = 0; i < eIcicleTotal; ++i)
-		{
-			icicles[i].SetInitialState(this);
-		}
+		DynamicState_Reset();
 
 		memset(gIcicleLEDDisplayMemory, 0, sizeof(gIcicleLEDDisplayMemory));
 
@@ -158,8 +151,7 @@ private:
 		MCommandRegister("recedecolor_set", CModule_Icicle::RecedeUpColorSet, "[r] [g] [b]: Set the recede up color range 0.0 -> 1.0");
 		MCommandRegister("staticcolor_set", CModule_Icicle::StaticColorSet, "[r] [g] [b]: Set the static color range 0.0 -> 1.0");
 		MCommandRegister("staticintensity_set", CModule_Icicle::StaticIntensitySet, "[intensity]: Set the static intensity 0.0 -> 1.0");
-		MCommandRegister("rendermode_set", CModule_Icicle::RenderModeSet, "[dynamic | static]: Set the render mode");
-		MCommandRegister("testmode_set", CModule_Icicle::TestModeSet, "[allon | alloff | icicle | strand]: Set the test mode");
+		MCommandRegister("rendermode_set", CModule_Icicle::RenderModeSet, ": Set the render mode");
 
 		leds.begin();
 
@@ -169,6 +161,16 @@ private:
 		}
 
 		leds.show();
+	}
+
+	void
+	DynamicState_Reset(
+		void)
+	{
+		for(int i = 0; i < eIcicleTotal; ++i)
+		{
+			icicles[i].SetInitialState(this);
+		}
 	}
 
 	void
@@ -184,9 +186,6 @@ private:
 
 		// add render mode
 		inOutput->printf("<tr><td>RenderMode</td><td>%s</td></tr>", gRenderModeStr[settings.renderMode]);
-
-		// add test mode
-		inOutput->printf("<tr><td>TestMode</td><td>%s</td></tr>", settings.renderMode == eRenderMode_Test ? gTestModeStr[testMode] : "off");
 
 		// add grow rate
 		inOutput->printf("<tr><td>GrowRate</td><td>%2.2f %2.2f</td></tr>", settings.meanGrowRateLEDsPerSec, settings.stdGrowRateLEDsPerSec);
@@ -222,6 +221,37 @@ private:
 		inOutput->printf("<tr><td>Static Intensity</td><td>%1.2f</td></tr>", settings.staticIntensity);
 
 		inOutput->printf("</table>");
+		
+		inOutput->printf("<table><tr><td><form action=\"rendermode\"><fieldset><legend>Change Render Mode</legend>");
+		for(int i = 0; i < eRenderMode_Count; ++i)
+		{
+			inOutput->printf("<input type=\"radio\" name=\"rendermode\" value=\"%s\" %s>%s<br>", gRenderModeStr[i], settings.renderMode == i ? "Checked" : "", gRenderModeStr[i]);
+		}
+		inOutput->printf("<input type=\"submit\" value=\"Submit\">");
+		inOutput->printf("</fieldset></form></td></tr></table>");
+	}
+
+	void
+	CommandRenderModePageHandler(
+		IOutputDirector*	inOutput,
+		int					inParamCount,
+		char const**		inParamList)
+	{
+		if(inParamCount != 2 && strcmp(inParamList[0], "rendermode") != 0)
+		{
+			return;
+		}
+		int i;
+		for(i = 0; i < eRenderMode_Count; ++i)
+		{
+			if (strcmp(inParamList[1], gRenderModeStr[i]) == 0)
+			{
+				settings.renderMode = (uint8_t)i;
+				break;
+			}
+		}
+
+		EEPROMSave();
 	}
 
 	virtual void
@@ -265,6 +295,8 @@ private:
 
 		EEPROMSave();
 
+		DynamicState_Reset();
+
 		return eCmd_Succeeded;
 	}
 
@@ -280,6 +312,8 @@ private:
 		settings.stdPeekDepth = (float)atof(inArgV[2]);
 
 		EEPROMSave();
+
+		DynamicState_Reset();
 
 		return eCmd_Succeeded;
 	}
@@ -297,6 +331,8 @@ private:
 
 		EEPROMSave();
 
+		DynamicState_Reset();
+
 		return eCmd_Succeeded;
 	}
 
@@ -313,6 +349,8 @@ private:
 
 		EEPROMSave();
 
+		DynamicState_Reset();
+
 		return eCmd_Succeeded;
 	}
 
@@ -328,6 +366,8 @@ private:
 		settings.waterDripRatePostLEDsPerTick = (float)atof(inArgV[2]);
 
 		EEPROMSave();
+
+		DynamicState_Reset();
 
 		return eCmd_Succeeded;
 	}
@@ -412,6 +452,7 @@ private:
 			if (strcmp(inArgV[1], gRenderModeStr[i]) == 0)
 			{
 				settings.renderMode = (uint8_t)i;
+				break;
 			}
 		}
 
@@ -421,33 +462,6 @@ private:
 		}
 
 		EEPROMSave();
-
-		return eCmd_Succeeded;
-	}
-
-	uint8_t
-	TestModeSet(
-		IOutputDirector*	inOutput,
-		int					inArgC,
-		char const*			inArgV[])
-	{
-		MReturnOnError(inArgC != 2, eCmd_Failed);
-
-		int i;
-		for (i = 0; i < eRenderMode_Count; ++i)
-		{
-			if (strcmp(inArgV[1], gTestModeStr[i]) == 0)
-			{
-				testMode = (uint8_t)i;
-			}
-		}
-
-		if (i >= eRenderMode_Count)
-		{
-			return eCmd_Failed;
-		}
-
-		settings.renderMode = eRenderMode_Test;
 
 		return eCmd_Succeeded;
 	}
@@ -496,22 +510,32 @@ private:
 		}
 		else
 		{
-			if(settings.renderMode == eRenderMode_DynamicIce)
+			switch(settings.renderMode)
 			{
-				UpdateModel(inDeltaUS);
-				RenderDynamic();
-			}
-			else if (settings.renderMode == eRenderMode_StaticIce)
-			{
-				RenderStatic();
-			}
-			else if (settings.renderMode == eRenderMode_AllOn)
-			{
-				RenderTest();
-			}
-			else if(settings.renderMode == eRenderMode_Test)
-			{
-				RenderTest();
+				case eRenderMode_StaticIce:
+					RenderStaticIce();
+					break;
+
+				case eRenderMode_DynamicIce:
+					UpdateModel(inDeltaUS);
+					RenderDynamicIce();
+					break;
+
+				case eRenderMode_AllOn:
+					RenderAllOn();
+					break;
+
+				case eRenderMode_AllOff:
+					RenderAllOff();
+					break;
+
+				case eRenderMode_Festive:
+					RenderFestive();
+					break;
+
+				case eRenderMode_Strand:
+					RenderStrand();
+					break;
 			}
 		}
 	}
@@ -535,7 +559,7 @@ private:
 	}
 
 	void
-	RenderStatic(
+	RenderStaticIce(
 		void)
 	{
 		uint8_t	staticR = (uint8_t)((float)settings.staticR * settings.staticIntensity);
@@ -612,112 +636,89 @@ private:
 				leds.setPixel(ledIndex, staticR, staticG, staticB);
 			}
 		}
-	}
-
-	void
-	RenderTest(
-		void)
-	{
-
-		switch(testMode)
-		{
-			case eTestMode_AllOn:
-			{
-				for(int i = 0; i < eIcicleTotal; ++i)
-				{
-					int	ledIndex;
-
-					for(uint32_t j = 0; j < eLEDsPerIcicle; ++j)
-					{
-						if((i & 1) == 1)
-						{
-							// odd icicles have reverse ordering
-							ledIndex = (i + 1) * eLEDsPerIcicle - j - 1;
-						}
-						else
-						{
-							ledIndex = i * eLEDsPerIcicle + j;
-						}
-
-						leds.setPixel(ledIndex, 255, 255, 255);
-					}
-				}
-				break;
-			}
-
-			case eTestMode_AllOff:
-				for(int i = 0; i < eIcicleTotal; ++i)
-				{
-					int	ledIndex;
-			
-					for(uint32_t j = 0; j < eLEDsPerIcicle; ++j)
-					{
-						if((i & 1) == 1)
-						{
-							// odd icicles have reverse ordering
-							ledIndex = (i + 1) * eLEDsPerIcicle - j - 1;
-						}
-						else
-						{
-							ledIndex = i * eLEDsPerIcicle + j;
-						}
-
-						leds.setPixel(ledIndex, 0, 0, 0);
-					}
-				}
-				break;
-
-			case eTestMode_Icicle:
-				for(int i = 0; i < eIcicleTotal; ++i)
-				{
-					int	ledIndex;
-			
-					for(uint32_t j = 0; j < eLEDsPerIcicle; ++j)
-					{
-						if((i & 1) == 1)
-						{
-							// odd icicles have reverse ordering
-							ledIndex = (i + 1) * eLEDsPerIcicle - j - 1;
-						}
-						else
-						{
-							ledIndex = i * eLEDsPerIcicle + j;
-						}
-
-						uint8_t	r, g, b;
-
-						r = (uint8_t)(gColorTable[j].r * settings.staticIntensity * 255.0f);
-						g = (uint8_t)(gColorTable[j].g * settings.staticIntensity * 255.0f);
-						b = (uint8_t)(gColorTable[j].b * settings.staticIntensity * 255.0f);
-
-						leds.setPixel(ledIndex, r, g, b);
-					}
-				}
-				break;
-
-			case eTestMode_Strand:
-				for(int i = 0; i < eStripCount; ++i)
-				{
-					uint8_t	r, g, b;
-
-					r = (uint8_t)(gColorTable[i].r * settings.staticIntensity * 255.0f);
-					g = (uint8_t)(gColorTable[i].g * settings.staticIntensity * 255.0f);
-					b = (uint8_t)(gColorTable[i].b * settings.staticIntensity * 255.0f);
-
-					for(int j = 0; j < eLEDsPerStrip; ++j)
-					{
-						leds.setPixel(i * eLEDsPerStrip + j, r, g, b);
-					}
-				}
-				break;
-		}
-
-
 		leds.show();
 	}
 
 	void
-	RenderDynamic(
+	RenderAllOff(
+		void)
+	{
+		for(int i = 0; i < eIcicleTotal; ++i)
+		{
+			int	ledIndex;
+			
+			for(uint32_t j = 0; j < eLEDsPerIcicle; ++j)
+			{
+				if((i & 1) == 1)
+				{
+					// odd icicles have reverse ordering
+					ledIndex = (i + 1) * eLEDsPerIcicle - j - 1;
+				}
+				else
+				{
+					ledIndex = i * eLEDsPerIcicle + j;
+				}
+
+				leds.setPixel(ledIndex, 0, 0, 0);
+			}
+		}
+		leds.show();
+	}
+
+	void
+	RenderFestive(
+		void)
+	{
+		for(int i = 0; i < eIcicleTotal; ++i)
+		{
+			int	ledIndex;
+			
+			for(uint32_t j = 0; j < eLEDsPerIcicle; ++j)
+			{
+				if((i & 1) == 1)
+				{
+					// odd icicles have reverse ordering
+					ledIndex = (i + 1) * eLEDsPerIcicle - j - 1;
+				}
+				else
+				{
+					ledIndex = i * eLEDsPerIcicle + j;
+				}
+
+				uint8_t	r, g, b;
+
+				r = (uint8_t)(gColorTable[j].r * settings.staticIntensity * 255.0f);
+				g = (uint8_t)(gColorTable[j].g * settings.staticIntensity * 255.0f);
+				b = (uint8_t)(gColorTable[j].b * settings.staticIntensity * 255.0f);
+
+				leds.setPixel(ledIndex, r, g, b);
+			}
+		}
+		leds.show();
+	}
+
+	void
+	RenderStrand(
+		void)
+	{
+		for(int i = 0; i < eStripCount; ++i)
+		{
+			uint8_t	r, g, b;
+
+			r = (uint8_t)(gColorTable[i].r * settings.staticIntensity * 255.0f);
+			g = (uint8_t)(gColorTable[i].g * settings.staticIntensity * 255.0f);
+			b = (uint8_t)(gColorTable[i].b * settings.staticIntensity * 255.0f);
+
+			for(int j = 0; j < eLEDsPerStrip; ++j)
+			{
+				leds.setPixel(i * eLEDsPerStrip + j, r, g, b);
+			}
+		}
+		leds.show();
+	}
+
+	void
+	RenderDynamicIce(
 		void)
 	{
 		SIcicleState*	curState = icicles;
