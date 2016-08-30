@@ -114,7 +114,7 @@ private:
 	{
 		IInternetDevice*		internetDevice = CModule_ESP8266::Include(5, &Serial1, eESP8266ResetPint);
 		IRealTimeDataProvider*	ds3234Provider = CreateDS3234Provider(10);
-		CModule_Loggly*			loggly = CModule_Loggly::Include("pergola2", "logs-01.loggly.com", "/inputs/568b321d-0d6f-47d3-ac34-4a36f4125612");
+		CModule_Loggly*			loggly = CModule_Loggly::Include("pergola2", "logs-01.loggly.com", "/inputs/XXX_YOUR_ID_HERE");
 		
 		CModule_RealTime::Include();
 		CModule_Internet::Include();
